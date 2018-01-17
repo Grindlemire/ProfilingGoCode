@@ -9,6 +9,7 @@ import (
 	"os"
 	"runtime/trace"
 	"strings"
+	"sync"
 
 	log "github.com/cihub/seelog"
 	"github.com/grindlemire/seezlog"
@@ -70,7 +71,12 @@ func main() {
 		defer trace.Stop()
 	}
 
-	img, err := executeAlgorithm()
+	// img, err := executeAlgorithm()
+	// img, err := executeColumnParallelAlgorithm()
+	img, err := executeBufferedColumnWorkersAlgorithm()
+	// img, err := executeWorkersAlgorithm()
+	// img, err := executeBufferedWorkersAlgorithm()
+	// img, err := executePixelParallelAlgorithm()
 	if err != nil {
 		log.Error("Error executing algorithm: ", err)
 		exit(1)
@@ -101,6 +107,132 @@ func getProfiler() func(p *profile.Profile) {
 }
 
 func executeAlgorithm() (img image.Image, err error) {
+	m := createPNG()
+	for i := 0; i < opts.Width; i++ {
+		for j := 0; j < opts.Height; j++ {
+			m.Set(i, j, getMandelbrotColor(i, j))
+		}
+	}
+	return m, nil
+}
+
+func executePixelParallelAlgorithm() (img image.Image, err error) {
+	m := createPNG()
+
+	wg := sync.WaitGroup{}
+	wg.Add(opts.Width * opts.Height)
+	for i := 0; i < opts.Width; i++ {
+		for j := 0; j < opts.Height; j++ {
+			go func(i, j int) {
+				m.Set(i, j, getMandelbrotColor(i, j))
+				wg.Done()
+			}(i, j)
+		}
+	}
+	wg.Wait()
+	return m, nil
+}
+
+func executeColumnParallelAlgorithm() (img image.Image, err error) {
+	m := createPNG()
+
+	wg := sync.WaitGroup{}
+	wg.Add(opts.Width)
+	for i := 0; i < opts.Width; i++ {
+		go func(i int) {
+			for j := 0; j < opts.Height; j++ {
+				m.Set(i, j, getMandelbrotColor(i, j))
+
+			}
+			wg.Done()
+		}(i)
+	}
+	wg.Wait()
+	return m, nil
+}
+
+func executeWorkersAlgorithm() (img image.Image, err error) {
+	m := createPNG()
+
+	wg := sync.WaitGroup{}
+	c := make(chan map[string]int)
+
+	for n := 0; n < 8; n++ {
+		wg.Add(1)
+		go func() {
+			for px := range c {
+				x := px["x"]
+				y := px["y"]
+				m.Set(x, y, getMandelbrotColor(x, y))
+			}
+			wg.Done()
+		}()
+	}
+
+	for i := 0; i < opts.Width; i++ {
+		for j := 0; j < opts.Height; j++ {
+			c <- map[string]int{"x": i, "y": j}
+		}
+	}
+	fmt.Printf("Done and waiting in main thread\n")
+	close(c)
+	wg.Wait()
+	return m, nil
+}
+
+func executeBufferedWorkersAlgorithm() (img image.Image, err error) {
+	m := createPNG()
+
+	wg := sync.WaitGroup{}
+	c := make(chan map[string]int, opts.Width*opts.Height)
+	for n := 0; n < 8; n++ {
+		wg.Add(1)
+		go func() {
+			for px := range c {
+				x := px["x"]
+				y := px["y"]
+				m.Set(x, y, getMandelbrotColor(x, y))
+			}
+			wg.Done()
+		}()
+	}
+	for i := 0; i < opts.Width; i++ {
+		for j := 0; j < opts.Height; j++ {
+			c <- map[string]int{"x": i, "y": j}
+		}
+	}
+	close(c)
+	wg.Wait()
+	return m, nil
+}
+
+func executeBufferedColumnWorkersAlgorithm() (img image.Image, err error) {
+	m := createPNG()
+
+	wg := sync.WaitGroup{}
+	c := make(chan int, opts.Width)
+	for n := 0; n < 8; n++ {
+		wg.Add(1)
+		go func() {
+			for i := range c {
+				for j := 0; j < opts.Height; j++ {
+					m.Set(i, j, getMandelbrotColor(i, j))
+				}
+			}
+			wg.Done()
+		}()
+	}
+
+	for i := 0; i < opts.Width; i++ {
+		c <- i
+	}
+
+	close(c)
+	wg.Wait()
+	return m, nil
+}
+
+func createPNG() (m *image.RGBA) {
 	palette := []color.RGBA{}
 	for i := 0; i < 1000; i++ {
 		c := color.RGBA{
@@ -112,13 +244,8 @@ func executeAlgorithm() (img image.Image, err error) {
 		palette = append(palette, c)
 	}
 	r := image.Rect(0, 0, opts.Width, opts.Height)
-	m := image.NewRGBA(r)
-	for i := 0; i < opts.Width; i++ {
-		for j := 0; j < opts.Height; j++ {
-			m.Set(i, j, getMandelbrotColor(i, j))
-		}
-	}
-	return m, nil
+	m = image.NewRGBA(r)
+	return m
 }
 
 func transformColor(i int) color.RGBA {
