@@ -37,18 +37,29 @@ var opts Opts
 var parser = flags.NewParser(&opts, flags.Default)
 
 func main() {
-	logger, err := seezlog.SetupConsoleLogger(seezlog.Critical)
+	logger, err := seezlog.SetupConsoleLogger(seezlog.Info)
 	if err != nil {
 		fmt.Printf("Error creating logger: %v\n", err)
 		exit(1)
 	}
-	log.ReplaceLogger(logger)
-
-	_, err = parser.Parse()
-	if err != nil && !isUsage(err) {
-		log.Error("Error parsing arguments: ", err)
+	err = log.ReplaceLogger(logger)
+	if err != nil {
+		fmt.Printf("Error replacing logger: %s\n", err)
 		exit(1)
 	}
+	defer log.Flush()
+
+	_, err = parser.Parse()
+	if err != nil {
+		if !isUsage(err) {
+			log.Error("Error parsing arguments: ", err)
+			exit(1)
+		} else {
+			exit(0)
+		}
+	}
+
+	// LaunchServer()
 
 	f, err := os.Create(opts.File)
 	if err != nil {
@@ -71,12 +82,12 @@ func main() {
 		defer trace.Stop()
 	}
 
-	// img, err := executeAlgorithm()
-	// img, err := executeColumnParallelAlgorithm()
-	img, err := executeBufferedColumnWorkersAlgorithm()
-	// img, err := executeWorkersAlgorithm()
-	// img, err := executeBufferedWorkersAlgorithm()
-	// img, err := executePixelParallelAlgorithm()
+	// img, err := executeAlgorithm(opts)
+	// img, err := executeColumnParallelAlgorithm(opts)
+	img, err := executeBufferedColumnWorkersAlgorithm(opts)
+	// img, err := executeWorkersAlgorithm(opts)
+	// img, err := executeBufferedWorkersAlgorithm(opts)
+	// img, err := executePixelParallelAlgorithm(opts)
 	if err != nil {
 		log.Error("Error executing algorithm: ", err)
 		exit(1)
@@ -106,25 +117,25 @@ func getProfiler() func(p *profile.Profile) {
 	return nil
 }
 
-func executeAlgorithm() (img image.Image, err error) {
-	m := createPNG()
+func executeAlgorithm(opts Opts) (img image.Image, err error) {
+	m := createPNG(opts)
 	for i := 0; i < opts.Width; i++ {
 		for j := 0; j < opts.Height; j++ {
-			m.Set(i, j, getMandelbrotColor(i, j))
+			m.Set(i, j, getMandelbrotColor(i, j, opts))
 		}
 	}
 	return m, nil
 }
 
-func executePixelParallelAlgorithm() (img image.Image, err error) {
-	m := createPNG()
+func executePixelParallelAlgorithm(opts Opts) (img image.Image, err error) {
+	m := createPNG(opts)
 
 	wg := sync.WaitGroup{}
 	wg.Add(opts.Width * opts.Height)
 	for i := 0; i < opts.Width; i++ {
 		for j := 0; j < opts.Height; j++ {
 			go func(i, j int) {
-				m.Set(i, j, getMandelbrotColor(i, j))
+				m.Set(i, j, getMandelbrotColor(i, j, opts))
 				wg.Done()
 			}(i, j)
 		}
@@ -133,15 +144,15 @@ func executePixelParallelAlgorithm() (img image.Image, err error) {
 	return m, nil
 }
 
-func executeColumnParallelAlgorithm() (img image.Image, err error) {
-	m := createPNG()
+func executeColumnParallelAlgorithm(opts Opts) (img image.Image, err error) {
+	m := createPNG(opts)
 
 	wg := sync.WaitGroup{}
 	wg.Add(opts.Width)
 	for i := 0; i < opts.Width; i++ {
 		go func(i int) {
 			for j := 0; j < opts.Height; j++ {
-				m.Set(i, j, getMandelbrotColor(i, j))
+				m.Set(i, j, getMandelbrotColor(i, j, opts))
 
 			}
 			wg.Done()
@@ -151,8 +162,8 @@ func executeColumnParallelAlgorithm() (img image.Image, err error) {
 	return m, nil
 }
 
-func executeWorkersAlgorithm() (img image.Image, err error) {
-	m := createPNG()
+func executeWorkersAlgorithm(opts Opts) (img image.Image, err error) {
+	m := createPNG(opts)
 
 	wg := sync.WaitGroup{}
 	c := make(chan map[string]int)
@@ -163,7 +174,7 @@ func executeWorkersAlgorithm() (img image.Image, err error) {
 			for px := range c {
 				x := px["x"]
 				y := px["y"]
-				m.Set(x, y, getMandelbrotColor(x, y))
+				m.Set(x, y, getMandelbrotColor(x, y, opts))
 			}
 			wg.Done()
 		}()
@@ -174,14 +185,13 @@ func executeWorkersAlgorithm() (img image.Image, err error) {
 			c <- map[string]int{"x": i, "y": j}
 		}
 	}
-	fmt.Printf("Done and waiting in main thread\n")
 	close(c)
 	wg.Wait()
 	return m, nil
 }
 
-func executeBufferedWorkersAlgorithm() (img image.Image, err error) {
-	m := createPNG()
+func executeBufferedWorkersAlgorithm(opts Opts) (img image.Image, err error) {
+	m := createPNG(opts)
 
 	wg := sync.WaitGroup{}
 	c := make(chan map[string]int, opts.Width*opts.Height)
@@ -191,7 +201,7 @@ func executeBufferedWorkersAlgorithm() (img image.Image, err error) {
 			for px := range c {
 				x := px["x"]
 				y := px["y"]
-				m.Set(x, y, getMandelbrotColor(x, y))
+				m.Set(x, y, getMandelbrotColor(x, y, opts))
 			}
 			wg.Done()
 		}()
@@ -206,8 +216,8 @@ func executeBufferedWorkersAlgorithm() (img image.Image, err error) {
 	return m, nil
 }
 
-func executeBufferedColumnWorkersAlgorithm() (img image.Image, err error) {
-	m := createPNG()
+func executeBufferedColumnWorkersAlgorithm(opts Opts) (img image.Image, err error) {
+	m := createPNG(opts)
 
 	wg := sync.WaitGroup{}
 	c := make(chan int, opts.Width)
@@ -216,7 +226,7 @@ func executeBufferedColumnWorkersAlgorithm() (img image.Image, err error) {
 		go func() {
 			for i := range c {
 				for j := 0; j < opts.Height; j++ {
-					m.Set(i, j, getMandelbrotColor(i, j))
+					m.Set(i, j, getMandelbrotColor(i, j, opts))
 				}
 			}
 			wg.Done()
@@ -232,7 +242,7 @@ func executeBufferedColumnWorkersAlgorithm() (img image.Image, err error) {
 	return m, nil
 }
 
-func createPNG() (m *image.RGBA) {
+func createPNG(opts Opts) (m *image.RGBA) {
 	palette := []color.RGBA{}
 	for i := 0; i < 1000; i++ {
 		c := color.RGBA{
@@ -248,7 +258,7 @@ func createPNG() (m *image.RGBA) {
 	return m
 }
 
-func transformColor(i int) color.RGBA {
+func transformColor(i int, opts Opts) color.RGBA {
 	c := (float64(i) / float64(opts.MaxIteration-1)) * (255) * 15
 
 	// if you are in set be black
@@ -280,7 +290,7 @@ func transformColor(i int) color.RGBA {
 	}
 }
 
-func getMandelbrotColor(i, j int) color.RGBA {
+func getMandelbrotColor(i, j int, opts Opts) color.RGBA {
 	iteration := 0
 	cx := 1.5*(float64(i)-float64(opts.Width)/2.0)/(.5*float64(opts.Width)*opts.Zoom) + opts.MoveX
 	cy := (float64(j)-float64(opts.Height)/2.0)/(0.5*opts.Zoom*float64(opts.Height)) + opts.MoveY
@@ -297,7 +307,7 @@ func getMandelbrotColor(i, j int) color.RGBA {
 		newY = 2.0*oldX*oldY + cy
 		iteration++
 	}
-	return transformColor(iteration)
+	return transformColor(iteration, opts)
 }
 
 func exit(status int) {
